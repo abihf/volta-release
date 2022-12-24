@@ -1,0 +1,106 @@
+name: Build
+
+on:
+  push:
+    tags:
+      - "v*"
+
+jobs:
+  build:
+    strategy:
+      fail-fast: true
+      matrix:
+        arch:
+          - x86_64
+          - aarch64
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v3
+        with:
+          submodules: true
+
+      - name: move app source to root
+        run: mv volta/* .
+
+      - uses: actions-rs/toolchain@v1
+        with:
+          profile: minimal
+          toolchain: 1.63
+          override: true
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: ${{ matrix.arch }}
+
+      - name: install cross
+        run: cargo install cross
+
+      - name: Build
+        run: cross build --release --target ${{ matrix.arch }}-unknown-linux-musl
+        working-directory: volta
+        env:
+          RUSTFLAGS: -C target-feature=+crt-static
+
+      - name: Create artifact
+        run: tar -czvf ../../../volta-linux-${{ matrix.arch }}.tar.gz volta volta-shim volta-migrate
+        working-directory: target/${{ matrix.arch }}-unknown-linux-musl/release
+
+      - uses: actions/upload-artifact@v3
+        with:
+          name: linux-${{ matrix.arch }}
+          path: volta-linux-${{ matrix.arch }}.tar.gz
+
+  release:
+    runs-on: ubuntu-22.04
+    needs:
+      - build
+    steps:
+      - uses: actions/checkout@v3
+
+      - name: Determine release version
+        id: release_info
+        env:
+          TAG: ${{ github.ref }}
+        run: echo "version=${TAG:11}" >> $GITHUB_OUTPUT
+
+      - name: Fetch Linux-x86_64 artifact
+        uses: actions/download-artifact@v2
+        with:
+          name: linux-x86_64
+          path: release
+
+      - name: Fetch Linux-aarch64 artifact
+        uses: actions/download-artifact@v2
+        with:
+          name: linux-aarch64
+          path: release
+
+      - name: Create draft release
+        id: create_release
+        uses: actions/create-release@v1
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          tag_name: ${{ github.ref }}
+          release_name: ${{ github.ref }}
+          draft: true
+
+      - name: Upload Linux-x86_64 artifact
+        uses: actions/upload-release-asset@v1
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          upload_url: ${{ steps.create_release.outputs.upload_url }}
+          asset_path: ./release/volta-linux-x86_64.tar.gz
+          asset_name: volta-${{ steps.release_info.outputs.version }}-linux.tar.gz
+          asset_content_type: application/gzip
+
+      - name: Upload Linux-aarch64 artifact
+        uses: actions/upload-release-asset@v1
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          upload_url: ${{ steps.create_release.outputs.upload_url }}
+          asset_path: ./release/volta-linux-aarch64.tar.gz
+          asset_name: volta-${{ steps.release_info.outputs.version }}-linux-arm64.tar.gz
+          asset_content_type: application/gzip
