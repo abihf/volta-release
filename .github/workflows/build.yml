@@ -1,0 +1,49 @@
+name: Build
+
+on:
+  push:
+
+jobs:
+  build:
+    strategy:
+      fail-fast: true
+      matrix:
+        arch:
+          - x86_64
+          - aarch64
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v3
+        with:
+          submodules: true
+
+      - name: move app source to root
+        run: mv volta/* .
+
+      - uses: actions-rs/toolchain@v1
+        with:
+          profile: minimal
+          toolchain: 1.63
+          override: true
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: ${{ matrix.arch }}
+
+      - name: install cross
+        run: cargo install cross
+
+      - name: Build
+        run: cross build --release --target ${{ matrix.arch }}-unknown-linux-musl
+        working-directory: volta
+        env:
+          RUSTFLAGS: -C target-feature=+crt-static
+
+      - name: Create artifact
+        run: tar -czvf ../../../volta-linux-${{ matrix.arch }}.tar.gz volta volta-shim volta-migrate
+        working-directory: target/${{ matrix.arch }}-unknown-linux-musl/release
+
+      - uses: actions/upload-artifact@v3
+        with:
+          name: linux-${{ matrix.arch }}
+          path: volta-linux-${{ matrix.arch }}.tar.gz
